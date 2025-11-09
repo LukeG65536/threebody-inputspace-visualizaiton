@@ -1,1 +1,5 @@
- 
+![alt text](Images/output2.jpg)
+![alt text](Images/output3.jpg) 
+![alt text](Images/output4.jpg) 
+![alt text](Images/output5.jpg) 
+![alt text](Images/output6.jpg) 
