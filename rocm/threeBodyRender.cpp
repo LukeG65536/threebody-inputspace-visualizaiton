@@ -33,7 +33,7 @@ __device__ pixel getColorMax(bodyState *bodys);
 __device__ pixel getColorMin(bodyState *bodys);
 __device__ void updateBodys(bodyState *bodys, double dt);
 __global__ void drawImg(pixel* img, bodyState *systems, vector2 *viewWindow, int wid, int ht, double dt, double time);
-#define widd 5000
+#define widd 1000
 #define timee 10
 
 int main()
@@ -45,8 +45,8 @@ int main()
     const int numPixel = width * height;
     vector2 *h_viewWindow = new vector2[2];
     vector2 *d_viewWindow;
-    h_viewWindow[0] = {-5,-5};
-    h_viewWindow[1] = {5,5};
+    h_viewWindow[0] = {-2,-2};
+    h_viewWindow[1] = {2,2};
 
 
 
@@ -54,9 +54,9 @@ int main()
     pixel *d_img;
 
     bodyState *initState = new bodyState[N];
-    initState[0] = {{-1,0},{0,-1},{0,0}};
+    initState[0] = {{-1,0},{0,1},{0,0}};
     initState[1] = {{0,0},{0,0},{0,0}};
-    initState[2] = {{1,0},{0,1},{0,0}};
+    initState[2] = {{1,0},{0,-1},{0,0}};
 
     bodyState *h_systems = (bodyState*)malloc(numPixel * sizeof(bodyState) * N);
     bodyState *d_systems;
@@ -80,7 +80,7 @@ int main()
 
 
 
-    drawImg<<<numPixel/threadPBlock, threadPBlock>>>(d_img, d_systems, d_viewWindow, width, height, .01, timee);
+    drawImg<<<numPixel/threadPBlock, threadPBlock>>>(d_img, d_systems, d_viewWindow, width, height, .0001, timee);
 
     
     hipMemcpy(h_img, d_img, sizeof(pixel) * numPixel, hipMemcpyDeviceToHost);
