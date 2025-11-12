@@ -35,11 +35,12 @@ __device__ void getAccels(const bodyState *bodys, vector2* accels);
 __device__ double tryRKDP45Step(bodyState *bodys, double dt, double tol);
 
 __device__ void updateBodys(bodyState *bodys, double dt);
-__global__ void drawImg(pixel* img, bodyState *systems, vector2 *viewWindow, int wid, int ht, double time);
-#define widd 1000
-#define timee 30
-#define tolerance 1e-13
-
+__global__ void drawImg(pixel* img, bodyState *systems, bodyState *local, vector2 *viewWindow, int wid, int ht, double time, bool rst);
+#define widd 500
+#define timee 1
+#define tolerance 1e-10
+#define minStep 0.0005
+#define winSize 3.3
 int main()
 {
     
@@ -49,8 +50,8 @@ int main()
     const int numPixel = width * height;
     vector2 *h_viewWindow = new vector2[2];
     vector2 *d_viewWindow;
-    h_viewWindow[0] = {-3.3,-3.3};
-    h_viewWindow[1] = {3.3,3.3};
+    h_viewWindow[0] = {-winSize, -winSize};
+    h_viewWindow[1] = {winSize, winSize};
 
 
 
@@ -65,6 +66,8 @@ int main()
     bodyState *h_systems = (bodyState*)malloc(numPixel * sizeof(bodyState) * N);
     bodyState *d_systems;
 
+    bodyState *d_local;
+
 
     for (int i = 0; i < numPixel; ++i) {
         for (int j = 0; j < N; ++j) {
@@ -77,14 +80,16 @@ int main()
     cudaMalloc(&d_img, sizeof(pixel) * width * height);
     cudaMalloc(&d_systems, sizeof(bodyState) * N * numPixel);
     cudaMalloc(&d_viewWindow, sizeof(vector2) * 2);
-
+    cudaMalloc(&d_local, sizeof(bodyState) * N * numPixel);
     
     cudaMemcpy(d_systems, h_systems, sizeof(bodyState) * N * numPixel, cudaMemcpyHostToDevice);
     cudaMemcpy(d_viewWindow, h_viewWindow, sizeof(vector2) * 2, cudaMemcpyHostToDevice);
 
 
 
-    drawImg<<<numPixel/threadPBlock, threadPBlock>>>(d_img, d_systems, d_viewWindow, width, height, timee);
+    drawImg<<<numPixel/threadPBlock, threadPBlock>>>(d_img, d_systems, d_local, d_viewWindow, width, height, timee/2., true);
+    drawImg<<<numPixel/threadPBlock, threadPBlock>>>(d_img, d_systems, d_local, d_viewWindow, width, height, timee/2., false);
+    // drawImg<<<numPixel/threadPBlock, threadPBlock>>>(d_img, d_systems, d_local, d_viewWindow, width, height, timee, true);
 
     
     cudaMemcpy(h_img, d_img, sizeof(pixel) * numPixel, cudaMemcpyDeviceToHost);
@@ -119,7 +124,7 @@ int main()
     return 0;
 }
 
-__global__ void drawImg(pixel* img, bodyState *systems, vector2 *viewWindow, int wid, int ht, double time)
+__global__ void drawImg(pixel* img, bodyState *systems, bodyState *localp, vector2 *viewWindow, int wid, int ht, double time, bool rst)
 {
 //assuming that systems is already assigned 
     int numPix = wid * ht;
@@ -129,15 +134,20 @@ __global__ void drawImg(pixel* img, bodyState *systems, vector2 *viewWindow, int
     int xScreenPos = idx%wid;
     int yScreenPos = idx/wid;
 
-    bodyState local[N];
-    for (int j = 0; j < N; ++j) local[j] = systems[base + j];
-
+    // bodyState local[N];
+    bodyState *local = &localp[idx * N];
+    
     double xNorm = xScreenPos / (double)wid;
     double yNorm = yScreenPos / (double)ht;
     double xDist = viewWindow[1].x - viewWindow[0].x;
     double yDist = viewWindow[1].y - viewWindow[0].y;
-    local[1].vel.x = xDist * xNorm + viewWindow[0].x;
-    local[1].vel.y = yDist * yNorm + viewWindow[0].y;
+
+    if(rst) 
+    {
+        for (int j = 0; j < N; ++j) local[j] = systems[base + j];
+        local[1].vel.x = xDist * xNorm + viewWindow[0].x;
+        local[1].vel.y = yDist * yNorm + viewWindow[0].y;
+    }
 
 
     updateBodys(local, time);
@@ -145,7 +155,6 @@ __global__ void drawImg(pixel* img, bodyState *systems, vector2 *viewWindow, int
     img[idx] = getColor(local);
     
 }
-
 
 __device__ pixel getColor(bodyState *bodys)
 {
@@ -279,8 +288,8 @@ __device__ double tryRKDP45Step(bodyState *bodys, double dt, double tol)
     }
     
     double potential = .9*dt*pow((tol/maxErr), 1.0/5.0); //iif the error isn't acceptible think about 
-    if(potential < 0.0005){ //if were getting way to small just force an update and continue
-        potential = .0005;
+    if(potential < minStep){ //if were getting way to small just force an update and continue
+        potential = minStep;
         
         for (int i = 0; i < N; i++)
         {

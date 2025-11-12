@@ -31,8 +31,8 @@ __device__ double v2Magnitude(vector2 a);
 __device__ pixel getColor(bodyState *bodys);
 __device__ void updateBodys(bodyState *bodys, double dt);
 __global__ void drawImg(pixel* img, bodyState *systems, vector2 *viewWindow, int wid, int ht, double dt, double time);
-#define widd 500
-#define timee 2
+#define widd 200
+#define timee 10
 
 int main()
 {
@@ -43,8 +43,8 @@ int main()
     const int numPixel = width * height;
     vector2 *h_viewWindow = new vector2[2];
     vector2 *d_viewWindow;
-    h_viewWindow[0] = {-2,-2};
-    h_viewWindow[1] = {2,2};
+    h_viewWindow[0] = {-3.3,-3.3};
+    h_viewWindow[1] = {3.3,3.3};
 
 
 
