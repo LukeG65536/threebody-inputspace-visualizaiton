@@ -34,68 +34,24 @@ __device__ void addDState(bodyState *state, bodyState *dState, double dStateScal
 __device__ void getAccels(const bodyState *bodys, vector2* accels);
 __device__ double tryRKDP45Step(bodyState *bodys, double dt, double tol);
 
-__device__ void updateBodys(bodyState *bodys, double dt);
-__global__ void drawImg(pixel* img, bodyState *systems, bodyState *local, vector2 *viewWindow, int wid, int ht, double time, bool rst);
+__device__ double updateBodys(bodyState *bodys, double dt, double lastDt);
+__global__ void drawImg(pixel* img, bodyState *systems, bodyState *local, vector2 *viewWindow, double *lastDt, int wid, int ht, double time, bool rst);
+
 #define widd 500
-#define timee 1
-#define tolerance 1e-10
-#define minStep 0.0005
-#define winSize 3.3
-int main()
+#define timee 50
+#define tolerance 1e-9
+#define minStep 0.0002
+#define winSize 1.5
+#define frameRate 10
+#define modifying vel
+
+
+void writeFrame(pixel* img, int num, int width, int height)
 {
-    
-    const int threadPBlock = 256;
-    const int width = widd;
-    const int height = widd;
-    const int numPixel = width * height;
-    vector2 *h_viewWindow = new vector2[2];
-    vector2 *d_viewWindow;
-    h_viewWindow[0] = {-winSize, -winSize};
-    h_viewWindow[1] = {winSize, winSize};
+    char filename[15]; //img0000.ppm
+    sprintf(filename, "out/img%4d.ppm", num);
 
-
-
-    pixel *h_img = (pixel*) malloc(sizeof(pixel) * numPixel);
-    pixel *d_img;
-
-    bodyState *initState = new bodyState[N];
-    initState[0] = {{-1,0},{0,1}};
-    initState[1] = {{0,0},{0,0}};
-    initState[2] = {{1,0},{0,-1}};
-
-    bodyState *h_systems = (bodyState*)malloc(numPixel * sizeof(bodyState) * N);
-    bodyState *d_systems;
-
-    bodyState *d_local;
-
-
-    for (int i = 0; i < numPixel; ++i) {
-        for (int j = 0; j < N; ++j) {
-            h_systems[i*N + j] = initState[j];
-        }
-    }
-
-    
-
-    cudaMalloc(&d_img, sizeof(pixel) * width * height);
-    cudaMalloc(&d_systems, sizeof(bodyState) * N * numPixel);
-    cudaMalloc(&d_viewWindow, sizeof(vector2) * 2);
-    cudaMalloc(&d_local, sizeof(bodyState) * N * numPixel);
-    
-    cudaMemcpy(d_systems, h_systems, sizeof(bodyState) * N * numPixel, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_viewWindow, h_viewWindow, sizeof(vector2) * 2, cudaMemcpyHostToDevice);
-
-
-
-    drawImg<<<numPixel/threadPBlock, threadPBlock>>>(d_img, d_systems, d_local, d_viewWindow, width, height, timee/2., true);
-    drawImg<<<numPixel/threadPBlock, threadPBlock>>>(d_img, d_systems, d_local, d_viewWindow, width, height, timee/2., false);
-    // drawImg<<<numPixel/threadPBlock, threadPBlock>>>(d_img, d_systems, d_local, d_viewWindow, width, height, timee, true);
-
-    
-    cudaMemcpy(h_img, d_img, sizeof(pixel) * numPixel, cudaMemcpyDeviceToHost);
-    printf("writting to file");
-
-    FILE *fp = fopen("output.ppm", "wb");
+    FILE *fp = fopen(filename, "wb");
     if (fp == NULL) {
         perror("Error opening file");
         exit(EXIT_FAILURE);
@@ -107,9 +63,9 @@ int main()
 
     for (int i = 0; i < width * height; i++)
     {
-        u_int8_t red = (u_int8_t)(h_img[i].r);
-        u_int8_t blue = (u_int8_t)(h_img[i].b);
-        u_int8_t green = (u_int8_t)(h_img[i].g);
+        u_int8_t red = (u_int8_t)(img[i].r);
+        u_int8_t blue = (u_int8_t)(img[i].b);
+        u_int8_t green = (u_int8_t)(img[i].g);
 
         fwrite(&red, sizeof(u_int8_t), 1, fp);
         fwrite(&green, sizeof(u_int8_t), 1, fp);
@@ -117,40 +73,112 @@ int main()
     }
 
     fclose(fp);
+}
+
+
+int main()
+{
+    //settings for img render
+    const int threadPBlock = 256;
+    const int width = widd;
+    const int height = widd;
+    const int numPixel = width * height;
+    vector2 *h_viewWindow = new vector2[2];
+    vector2 *d_viewWindow;
+    h_viewWindow[0] = {-winSize, -winSize};
+    h_viewWindow[1] = {winSize, winSize};
+
+
+
+    // pixel *h_img = (pixel*) malloc(sizeof(pixel) * numPixel);
+    pixel *img;
+    //trying unified memory
+    
+    bodyState *initState = new bodyState[N];
+    initState[0] = {{-1,0},{0,1}};
+    initState[1] = {{0,0},{0,0}};
+    initState[2] = {{1,0},{0,-1}};
+    
+    bodyState *h_systems = (bodyState*)malloc(numPixel * sizeof(bodyState) * N);
+    bodyState *d_systems;
+    
+    bodyState *d_local;
+    double *lastDt;
     
     
+    for (int i = 0; i < numPixel; ++i) {
+        for (int j = 0; j < N; ++j) {
+            h_systems[i*N + j] = initState[j]; //making all the systems start at initstate
+        }
+    }
+
+
+    //cuda memory stuff
+    int id = cudaGetDevice(&id);
+    
+    cudaMallocManaged(&img, sizeof(pixel) * numPixel);
+
+    // cudaMalloc(&d_img, sizeof(pixel) * width * height);
+    cudaMalloc(&d_systems, sizeof(bodyState) * N * numPixel);
+    cudaMalloc(&d_viewWindow, sizeof(vector2) * 2);
+    cudaMalloc(&d_local, sizeof(bodyState) * N * numPixel);
+    cudaMalloc(&lastDt, sizeof(double) * numPixel);
+    
+    cudaMemcpy(d_systems, h_systems, sizeof(bodyState) * N * numPixel, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_viewWindow, h_viewWindow, sizeof(vector2) * 2, cudaMemcpyHostToDevice);
+    
+    
+    int numFrames = frameRate * timee;
+    double timeStep = 1.0/((double)frameRate);
+    drawImg<<<numPixel/threadPBlock, threadPBlock>>>(img, d_systems, d_local, d_viewWindow, lastDt, width, height, timeStep, true);
+    
+    for (int i = 0; i < numFrames; i++)
+    {
+        drawImg<<<numPixel/threadPBlock, threadPBlock>>>(img, d_systems, d_local, d_viewWindow, lastDt, width, height, timeStep, false);
+        cudaMemPrefetchAsync(img, sizeof(pixel)*numPixel, cudaCpuDeviceId);
+        cudaDeviceSynchronize();
+        writeFrame(img, i, width, height);
+        printf("wrote frame %4d\n", i);
+    }
+        
+    // drawImg<<<numPixel/threadPBlock, threadPBlock>>>(img, d_systems, d_local, d_viewWindow, lastDt, width, height, timee, true);
+    
+    // cudaMemPrefetchAsync(img, sizeof(pixel)*numPixel, cudaCpuDeviceId);
+    // cudaDeviceSynchronize();
+    // writeFrame(img, 67, width, height);
 
 
     return 0;
 }
 
-__global__ void drawImg(pixel* img, bodyState *systems, bodyState *localp, vector2 *viewWindow, int wid, int ht, double time, bool rst)
+
+__global__ void drawImg(pixel* img, bodyState *systems, bodyState *localp, vector2 *viewWindow, double *lastDt, int wid, int ht, double time, bool rst)
 {
-//assuming that systems is already assigned 
+
+// bodyState local[N];
+
     int numPix = wid * ht;
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int base = idx * N;
     if (idx >= numPix) return;
-    int xScreenPos = idx%wid;
-    int yScreenPos = idx/wid;
-
-    // bodyState local[N];
     bodyState *local = &localp[idx * N];
-    
-    double xNorm = xScreenPos / (double)wid;
-    double yNorm = yScreenPos / (double)ht;
-    double xDist = viewWindow[1].x - viewWindow[0].x;
-    double yDist = viewWindow[1].y - viewWindow[0].y;
 
     if(rst) 
     {
+        int xScreenPos = idx%wid;
+        int yScreenPos = idx/wid;
+        double xNorm = xScreenPos / (double)wid;
+        double yNorm = yScreenPos / (double)ht;
+        double xDist = viewWindow[1].x - viewWindow[0].x;
+        double yDist = viewWindow[1].y - viewWindow[0].y;
         for (int j = 0; j < N; ++j) local[j] = systems[base + j];
-        local[1].vel.x = xDist * xNorm + viewWindow[0].x;
-        local[1].vel.y = yDist * yNorm + viewWindow[0].y;
+        local[1].modifying.x = xDist * xNorm + viewWindow[0].x;
+        local[1].modifying.y = yDist * yNorm + viewWindow[0].y;
+        lastDt[idx] = 0.01;
     }
 
 
-    updateBodys(local, time);
+    lastDt[idx] = updateBodys(local, time, lastDt[idx]);
     
     img[idx] = getColor(local);
     
@@ -171,23 +199,16 @@ __device__ pixel getColor(bodyState *bodys)
 
 
 
-__device__ void updateBodys(bodyState *bodys, double tf)
+__device__ double updateBodys(bodyState *bodys, double tf, double lastDt)
 {
 
     double time = 0;
-    double dt = .01;
-    double pdt = dt;
-    int failCount = 0;
+    double dt = lastDt;
     while(time <= tf){
         time += dt;
         dt = tryRKDP45Step(bodys, dt, tolerance);
-        if(dt == 0 || dt!=pdt) failCount++;
-        if(failCount > 20)
-        {
-            tryRKDP45Step(bodys, dt, -1);
-            failCount = 0;
-        } 
     }
+    return dt;
 }
 
 __device__ double tryRKDP45Step(bodyState *bodys, double dt, double tol)
