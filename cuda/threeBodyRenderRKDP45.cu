@@ -27,6 +27,7 @@ __device__ vector2 v2Sub(vector2 one, vector2 two);
 __device__ vector2 v2Scale(vector2 a, double s);
 __device__ double v2Magnitude(vector2 a);
 __device__ pixel getColor(bodyState *bodys);
+__device__ pixel getColor2(bodyState *bodys);
 
 __device__ void getDState(const bodyState *bodys, bodyState* res, vector2* accels);
 __device__ void scaleDState(bodyState *dState, bodyState *res, double scale);
@@ -38,13 +39,24 @@ __device__ double updateBodys(bodyState *bodys, double dt, double lastDt);
 __global__ void drawImg(pixel* img, bodyState *systems, bodyState *local, vector2 *viewWindow, double *lastDt, int wid, int ht, double time, bool rst);
 
 #define widd 500
-#define timee 50
-#define tolerance 1e-9
-#define minStep 0.0002
-#define winSize 1.5
-#define frameRate 10
+#define timee 10
+#define tolerance 1e-8
+#define minStep 0.0001
+#define winSize 2
+#define frameRate 5
 #define modifying vel
 
+#define color1R 255
+#define color1G 000
+#define color1B 000
+
+#define color2R 000
+#define color2G 255
+#define color2B 000
+
+#define color3R 000
+#define color3G 000
+#define color3B 255
 
 void writeFrame(pixel* img, int num, int width, int height)
 {
@@ -95,9 +107,9 @@ int main()
     //trying unified memory
     
     bodyState *initState = new bodyState[N];
-    initState[0] = {{-1,0},{0,1}};
+    initState[0] = {{-1,0},{0,0}};
     initState[1] = {{0,0},{0,0}};
-    initState[2] = {{1,0},{0,-1}};
+    initState[2] = {{1,0},{0,0}};
     
     bodyState *h_systems = (bodyState*)malloc(numPixel * sizeof(bodyState) * N);
     bodyState *d_systems;
@@ -128,24 +140,24 @@ int main()
     cudaMemcpy(d_viewWindow, h_viewWindow, sizeof(vector2) * 2, cudaMemcpyHostToDevice);
     
     
-    int numFrames = frameRate * timee;
-    double timeStep = 1.0/((double)frameRate);
-    drawImg<<<numPixel/threadPBlock, threadPBlock>>>(img, d_systems, d_local, d_viewWindow, lastDt, width, height, timeStep, true);
+    // int numFrames = frameRate * timee;
+    // double timeStep = 1.0/((double)frameRate);
+    // drawImg<<<numPixel/threadPBlock, threadPBlock>>>(img, d_systems, d_local, d_viewWindow, lastDt, width, height, timeStep, true);
     
-    for (int i = 0; i < numFrames; i++)
-    {
-        drawImg<<<numPixel/threadPBlock, threadPBlock>>>(img, d_systems, d_local, d_viewWindow, lastDt, width, height, timeStep, false);
-        cudaMemPrefetchAsync(img, sizeof(pixel)*numPixel, cudaCpuDeviceId);
-        cudaDeviceSynchronize();
-        writeFrame(img, i, width, height);
-        printf("wrote frame %4d\n", i);
-    }
+    // for (int i = 0; i < numFrames; i++)
+    // {
+    //     drawImg<<<numPixel/threadPBlock, threadPBlock>>>(img, d_systems, d_local, d_viewWindow, lastDt, width, height, timeStep, false);
+    //     cudaMemPrefetchAsync(img, sizeof(pixel)*numPixel, cudaCpuDeviceId);
+    //     cudaDeviceSynchronize();
+    //     writeFrame(img, i, width, height);
+    //     printf("wrote frame %4d\n", i);
+    // }
         
-    // drawImg<<<numPixel/threadPBlock, threadPBlock>>>(img, d_systems, d_local, d_viewWindow, lastDt, width, height, timee, true);
+    drawImg<<<numPixel/threadPBlock, threadPBlock>>>(img, d_systems, d_local, d_viewWindow, lastDt, width, height, timee, true);
     
-    // cudaMemPrefetchAsync(img, sizeof(pixel)*numPixel, cudaCpuDeviceId);
-    // cudaDeviceSynchronize();
-    // writeFrame(img, 67, width, height);
+    cudaMemPrefetchAsync(img, sizeof(pixel)*numPixel, cudaCpuDeviceId);
+    cudaDeviceSynchronize();
+    writeFrame(img, 67, width, height);
 
 
     return 0;
@@ -180,7 +192,7 @@ __global__ void drawImg(pixel* img, bodyState *systems, bodyState *localp, vecto
 
     lastDt[idx] = updateBodys(local, time, lastDt[idx]);
     
-    img[idx] = getColor(local);
+    img[idx] = getColor2(local);
     
 }
 
@@ -191,9 +203,30 @@ __device__ pixel getColor(bodyState *bodys)
     double d3 = v2Magnitude(v2Sub(bodys[0].pos, bodys[2].pos));
     double max = fmax(fmax(d1, d2), d3);
     pixel p;
+    double w1 = d1/max;
+    double w2 = d2/max;
+    double w3 = d3/max;
+    p.r = sqrt((color1R * color1R * w1 + color2R * color2R * w2 + color3R * color3R * w3)/(w1 + w2 + w3));
+    p.g = sqrt((color1G * color1G * w1 + color2G * color2G * w2 + color3G * color3G * w3)/(w1 + w2 + w3));
+    p.b = sqrt((color1B * color1B * w1 + color2B * color2B * w2 + color3B * color3B * w3)/(w1 + w2 + w3));
+    return p;
+}
+
+
+__device__ pixel getColor2(bodyState *bodys)
+{
+    double d1 = v2Magnitude(v2Sub(bodys[0].pos, bodys[1].pos));
+    double d2 = v2Magnitude(v2Sub(bodys[1].pos, bodys[2].pos));
+    double d3 = v2Magnitude(v2Sub(bodys[0].pos, bodys[2].pos));
+    double max = fmax(fmax(d1, d2), d3);
+    pixel p;
     p.r = 255 * d1/max;
     p.g = 255 * d2/max;
     p.b = 255 * d3/max;
+    // double w1 = d1/max;
+    // double w2 = d2/max;
+    // double w3 = d3/max;
+    
     return p;
 }
 
@@ -295,6 +328,7 @@ __device__ double tryRKDP45Step(bodyState *bodys, double dt, double tol)
         if (e > maxErr) maxErr = e;
     }
     
+    double potential = dt*pow((tol/maxErr), 1.0/5.0); 
 
     if (tol == -1 || maxErr < tol) //if the error is acceptable apply and slightly increase step size
     {
@@ -304,11 +338,10 @@ __device__ double tryRKDP45Step(bodyState *bodys, double dt, double tol)
         }
         
     
-        return dt*1.2;
+        return potential * 1.1;
         
     }
     
-    double potential = .9*dt*pow((tol/maxErr), 1.0/5.0); //iif the error isn't acceptible think about 
     if(potential < minStep){ //if were getting way to small just force an update and continue
         potential = minStep;
         
@@ -317,7 +350,7 @@ __device__ double tryRKDP45Step(bodyState *bodys, double dt, double tol)
             bodys[i] = y5[i];
         }
     }
-    return potential;
+    return potential * .9;
 }
 
 
