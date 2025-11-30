@@ -26,9 +26,9 @@ __device__ vector2 v2Add(vector2 a, vector2 b);
 __device__ vector2 v2Sub(vector2 one, vector2 two);
 __device__ vector2 v2Scale(vector2 a, double s);
 __device__ double v2Magnitude(vector2 a);
-__device__ pixel getColor(bodyState *bodys);
-__device__ pixel getColor2(bodyState *bodys);
+pixel getColor(bodyState *bodys1, bodyState *bodys2);
 
+double distBetween(vector2 v1, vector2 v2);
 __device__ void getDState(const bodyState *bodys, bodyState* res, vector2* accels);
 __device__ void scaleDState(bodyState *dState, bodyState *res, double scale);
 __device__ void addDState(bodyState *state, bodyState *dState, double dStateScale, bodyState * res);
@@ -36,7 +36,7 @@ __device__ void getAccels(const bodyState *bodys, vector2* accels);
 __device__ double tryRKDP45Step(bodyState *bodys, double dt, double tol);
 
 __device__ double updateBodys(bodyState *bodys, double dt, double lastDt);
-__global__ void drawImg(pixel* img, bodyState *systems, bodyState *local, vector2 *viewWindow, double *lastDt, int wid, int ht, double time, bool rst);
+__global__ void updateStates(bodyState* endStates, bodyState *systems, bodyState *local, vector2 *viewWindow, double *lastDt, int wid, int ht, double time, bool rst);
 
 #define widd 1000
 #define timee 20
@@ -45,6 +45,9 @@ __global__ void drawImg(pixel* img, bodyState *systems, bodyState *local, vector
 #define winSize 2
 #define frameRate 5
 #define modifying vel
+#define divModifying pos
+#define divOffsetX .00
+#define divOffsetY .001
 
 #define color1R 255
 #define color1G 000
@@ -58,7 +61,7 @@ __global__ void drawImg(pixel* img, bodyState *systems, bodyState *local, vector
 #define color3G 255
 #define color3B 000
 
-void writeFrame(pixel* img, int num, int width, int height)
+void writeFrame(bodyState *end1, bodyState *end2, int num, int width, int height)
 {
     char filename[15]; //img0000.ppm
     sprintf(filename, "out/img%4d.ppm", num);
@@ -75,9 +78,25 @@ void writeFrame(pixel* img, int num, int width, int height)
 
     for (int i = 0; i < width * height; i++)
     {
-        u_int8_t red = (u_int8_t)(img[i].r);
-        u_int8_t blue = (u_int8_t)(img[i].b);
-        u_int8_t green = (u_int8_t)(img[i].g);
+        // double dPosRX = end1[i*N].pos.x - end2[i*N].pos.x; 
+        // double dPosRY = end1[i*N].pos.y - end2[i*N].pos.y;
+        // double dPosGX = end1[i*N+1].pos.x - end2[i*N+1].pos.x;
+        // double dPosGY = end1[i*N+1].pos.y - end2[i*N+1].pos.y;
+        // double dPosBX = end1[i*N+2].pos.x - end2[i*N+2].pos.x;
+        // double dPosBY = end1[i*N+2].pos.y - end2[i*N+2].pos.y;
+
+        // u_int8_t red = (u_int8_t) sqrt(dPosRX * dPosRX + dPosRY * dPosRY);
+        // u_int8_t blue = (u_int8_t) sqrt(dPosGX * dPosGX + dPosGY * dPosGY);
+        // u_int8_t green = (u_int8_t) sqrt(dPosBX * dPosBX + dPosBY * dPosBY);
+
+        pixel p = getColor(&end1[i * N], &end2[i * N]);
+
+        u_int8_t red = abs(p.r);
+        u_int8_t green = abs(p.g);
+        u_int8_t blue = abs(p.b);
+
+        // printf("chords: %d,%d ", i%width, i/width);
+        // printf("r:%f g:%f b:%f\n", end1[i*N].pos.x, dPosGX, dPosBX);
 
         fwrite(&red, sizeof(u_int8_t), 1, fp);
         fwrite(&green, sizeof(u_int8_t), 1, fp);
@@ -95,6 +114,7 @@ int main()
     const int width = widd;
     const int height = widd;
     const int numPixel = width * height;
+    const int stateArrSize = numPixel * N;
     vector2 *h_viewWindow = new vector2[2];
     vector2 *d_viewWindow;
     h_viewWindow[0] = {-winSize, -winSize};
@@ -103,7 +123,8 @@ int main()
 
 
     // pixel *h_img = (pixel*) malloc(sizeof(pixel) * numPixel);
-    pixel *img;
+    bodyState *end;
+
     //trying unified memory
     
     bodyState *initState = new bodyState[N];
@@ -111,7 +132,9 @@ int main()
     initState[1] = {{0,0},{0,0}};
     initState[2] = {{1,0},{0,0}};
     
-    bodyState *h_systems = (bodyState*)malloc(numPixel * sizeof(bodyState) * N);
+    
+    bodyState *end2 = (bodyState*)malloc(stateArrSize * sizeof(bodyState));
+    bodyState *h_systems = (bodyState*)malloc(stateArrSize * sizeof(bodyState));
     bodyState *d_systems;
     
     bodyState *d_local;
@@ -128,15 +151,15 @@ int main()
     //cuda memory stuff
     int id = cudaGetDevice(&id);
     
-    cudaMallocManaged(&img, sizeof(pixel) * numPixel);
+    cudaMallocManaged(&end, sizeof(bodyState) * stateArrSize);
 
     // cudaMalloc(&d_img, sizeof(pixel) * width * height);
-    cudaMalloc(&d_systems, sizeof(bodyState) * N * numPixel);
+    cudaMalloc(&d_systems, sizeof(bodyState) * stateArrSize);
     cudaMalloc(&d_viewWindow, sizeof(vector2) * 2);
-    cudaMalloc(&d_local, sizeof(bodyState) * N * numPixel);
+    cudaMalloc(&d_local, sizeof(bodyState) * stateArrSize);
     cudaMalloc(&lastDt, sizeof(double) * numPixel);
     
-    cudaMemcpy(d_systems, h_systems, sizeof(bodyState) * N * numPixel, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_systems, h_systems, sizeof(bodyState) * stateArrSize, cudaMemcpyHostToDevice);
     cudaMemcpy(d_viewWindow, h_viewWindow, sizeof(vector2) * 2, cudaMemcpyHostToDevice);
     
     
@@ -153,18 +176,46 @@ int main()
     //     printf("wrote frame %4d\n", i);
     // }
         
-    drawImg<<<numPixel/threadPBlock, threadPBlock>>>(img, d_systems, d_local, d_viewWindow, lastDt, width, height, timee, true);
+    updateStates<<<numPixel/threadPBlock, threadPBlock>>>(end, d_systems, d_local, d_viewWindow, lastDt, width, height, timee, true);
     
-    cudaMemPrefetchAsync(img, sizeof(pixel)*numPixel, cudaCpuDeviceId);
+    cudaMemPrefetchAsync(end, sizeof(bodyState) * stateArrSize, cudaCpuDeviceId);
     cudaDeviceSynchronize();
-    writeFrame(img, -2, width, height);
+
+    
+    for (int i = 0; i < stateArrSize; i++)
+    {
+        end2[i] = end[i];
+    }
+    
+    printf("%f\n",end2[stateArrSize-500].pos.x);
+
+    initState[1].divModifying.x += divOffsetX;
+    initState[1].divModifying.y += divOffsetY;
+
+    
+    for (int i = 0; i < numPixel; ++i) {
+        for (int j = 0; j < N; ++j) {
+            h_systems[i*N + j] = initState[j]; //making all the systems start at initstate
+        }
+    }
+
+
+    cudaMemcpy(d_systems, h_systems, sizeof(bodyState) * stateArrSize, cudaMemcpyHostToDevice);
+
+    updateStates<<<numPixel/threadPBlock, threadPBlock>>>(end, d_systems, d_local, d_viewWindow, lastDt, width, height, timee, true);
+
+    cudaDeviceSynchronize();
+    
+    printf("%f\n", end[stateArrSize-500].pos.x);
+
+    writeFrame(end, end2, -1, width, height);
 
 
     return 0;
 }
 
 
-__global__ void drawImg(pixel* img, bodyState *systems, bodyState *localp, vector2 *viewWindow, double *lastDt, int wid, int ht, double time, bool rst)
+__global__ void updateStates(bodyState* endStates, bodyState *systems, bodyState *localp, vector2 *viewWindow, double *lastDt, int wid, int ht, double time, bool rst)
 {
 
 // bodyState local[N];
@@ -192,44 +243,31 @@ __global__ void drawImg(pixel* img, bodyState *systems, bodyState *localp, vecto
 
     lastDt[idx] = updateBodys(local, time, lastDt[idx]);
     
-    img[idx] = getColor(local);
+    endStates[idx*N] = local[0];
+    endStates[idx*N+1] = local[1];
+    endStates[idx*N+2] = local[2];
     
 }
 
-__device__ pixel getColor2(bodyState *bodys)
+pixel getColor(bodyState *bodys1, bodyState *bodys2)
 {
-    double d1 = v2Magnitude(v2Sub(bodys[0].pos, bodys[1].pos));
-    double d2 = v2Magnitude(v2Sub(bodys[1].pos, bodys[2].pos));
-    double d3 = v2Magnitude(v2Sub(bodys[0].pos, bodys[2].pos));
-    double max = fmax(fmax(d1, d2), d3);
-    pixel p;
-    double w1 = d1/max;
-    double w2 = d2/max;
-    double w3 = d3/max;
-    p.r = sqrt((color1R * color1R * w1 + color2R * color2R * w2 + color3R * color3R * w3)/(w1 + w2 + w3));
-    p.g = sqrt((color1G * color1G * w1 + color2G * color2G * w2 + color3G * color3G * w3)/(w1 + w2 + w3));
-    p.b = sqrt((color1B * color1B * w1 + color2B * color2B * w2 + color3B * color3B * w3)/(w1 + w2 + w3));
-    return p;
-}
+    double d1 = distBetween(bodys1[0].pos, bodys1[1].pos) - distBetween(bodys2[0].pos, bodys2[1].pos);
+    double d2 = distBetween(bodys1[0].pos, bodys1[2].pos) - distBetween(bodys2[0].pos, bodys2[2].pos);
+    double d3 = distBetween(bodys1[1].pos, bodys1[2].pos) - distBetween(bodys2[1].pos, bodys2[2].pos);
 
+    // double max = fmax(fmax(d1, d2), d3);
 
-__device__ pixel getColor(bodyState *bodys)
-{
-    double d1 = v2Magnitude(v2Sub(bodys[0].pos, bodys[1].pos));
-    double d2 = v2Magnitude(v2Sub(bodys[1].pos, bodys[2].pos));
-    double d3 = v2Magnitude(v2Sub(bodys[0].pos, bodys[2].pos));
-    double max = fmax(fmax(d1, d2), d3);
+    double d = d1+d2+d3;
+    
+
     pixel p;
-    p.r = 255 * d1/max;
-    p.g = 255 * d2/max;
-    p.b = 255 * d3/max;
-    // double w1 = d1/max;
-    // double w2 = d2/max;
-    // double w3 = d3/max;
+
+    p.r = (u_int8_t) (5*d);
+    p.g = (u_int8_t) (5*d);
+    p.b = (u_int8_t) (5*d);
     
     return p;
 }
-
 
 
 __device__ double updateBodys(bodyState *bodys, double tf, double lastDt)
@@ -447,5 +485,12 @@ __device__ vector2 v2Scale(vector2 one, double scale)
     ret.x = one.x * scale;
     ret.y = one.y * scale;
     return ret;
+}
+
+double distBetween(vector2 v1, vector2 v2)
+{
+    double dx = v1.x - v2.x;
+    double dy = v1.y - v2.y;
+    return sqrt(dx * dx + dy * dy);
 }
 
