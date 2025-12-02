@@ -1,3 +1,4 @@
+![alt text](Images/divergence1.jpg)
 ![alt text](Images/output6.jpg)
 ![alt text](Images/output1.jpg) 
 ![alt text](Images/output2.jpg)
